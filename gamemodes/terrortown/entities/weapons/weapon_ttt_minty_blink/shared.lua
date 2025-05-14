@@ -3,43 +3,49 @@
 
 AddCSLuaFile()
 
-local ENTITY = FindMetaTable( "Entity" )
-local PLAYER = FindMetaTable( "Player" )
+local IS_TTT2 = GAMEMODE.TTT2CheckFindCredits and true or false
 
 -- Modules
-local effect    = include( "effect.lua" )
-local cvar      = include( "cvar.lua" )
-local dbg       = include( "debug.lua" )
-local lut       = include( "lut.lua" )
-local res       = include( "resource.lua" )
+include( "i18n/shared.lua" )
 
--- dbg.enabled     = true
+local effect    = include( "lib/effect.lua" )
+local cvar      = include( "lib/cvar.lua" )
+local dbg       = include( "lib/debug.lua" )
+local draw_hud  = include( "lib/hud.lua" )
+local lut       = include( "lib/lut.lua" )
+local res       = include( "lib/resource.lua" )
+
+-- dbg.enabled  = true
 
 --  Misc
+local swep_classname        = "weapon_ttt_minty_blink"
+
 local marker_effect_size    = 10
 local marker_effect_rate    = 0.025
 
-local ledge_step_max        = 4
-local ledge_step_size       = 8
+local post_process_fade_time = 0.125
 
-local trace_hull_size       = 4
-local trace_ledge_depth     = 2
+local vector_up_far = Vector( 0, 0, 65535 )
+local vector_zero   = Vector( 0, 0, 0 )
 
-local post_process_fade_time    = 0.125
-local post_process_class_name   = "weapon_ttt_minty_blink"
+-- TTT2 settings
+SWEP.AddToSettingsMenu      = include( "lib/settings.lua" )
+SWEP.DrawHUD                = include( "lib/hud.lua" )
 
 -- Info struct
 SWEP.Base                   = "weapon_tttbase"
 
 --  Base
 SWEP.AutoSpawnable          = false
+SWEP.DeploySpeed            = 4
 SWEP.HoldType               = "knife"
 SWEP.Kind                   = WEAPON_EQUIP
 
-SWEP.PrintName              = "Blink"
+SWEP.PrintName              = "ttt_minty_blink_name"
 SWEP.Slot                   = 6
 
 SWEP.DrawCrosshair          = false
+SWEP.ShowDefaultViewModel   = false
 SWEP.UseHands               = true
 SWEP.ViewModel              = "models/weapons/c_slam.mdl"
 SWEP.ViewModelFlip          = false
@@ -50,7 +56,7 @@ SWEP.Primary.Recoil         = 0
 SWEP.Primary.ClipSize       = -1
 SWEP.Primary.DefaultClip    = -1
 SWEP.Primary.Automatic      = false
-SWEP.Primary.Delay          = 1
+SWEP.Primary.Delay          = 0.10
 SWEP.Primary.Ammo           = "none"
 
 --  TTT
@@ -60,7 +66,7 @@ SWEP.NoSights               = true
 
 SWEP.EquipMenuData          = {
     type = "item_weapon",
-    desc = "Woosh woosh.\n\nPrimary: Hold to target\nSecondary: Abort blink"
+    desc = "ttt_minty_blink_description"
 };
 
 SWEP.Icon                   = res.icon
@@ -87,15 +93,29 @@ SWEP.Emitter    = nil
 SWEP.State      = nil
 
 -- Logic
-
 --  Default
-function SWEP:DryFire() return false end        -- Disable default behaviours
+function SWEP:DryFire() return false end  -- Disable default behaviours
 function SWEP:PrimaryAttack() return false end
 
+if not IS_TTT2 then
+    -- TTT2 uses SWEP.ShowDefaultViewMode (https://github.com/Metastruct/terrortown_modding/pull/11#discussion_r2089630022)
+    function SWEP:PreDrawViewModel()
+        render.SetBlend( 0 ) -- Hide viewmodel
+    end
+
+    function SWEP:ViewModelDrawn()                  
+        render.SetBlend( 1 ) -- Show hands
+    end
+end
+
 function SWEP:Initialize()
-    self:SetHoldType( self.HoldType )
-    
-    local charge_max = ( cvar.charge_count:GetInt() > 0 and cvar.charge_count:GetInt() or cvar.charge_max:GetInt() )
+    if IS_TTT2 and CLIENT then
+        self:AddTTT2HUDHelp( "ttt_minty_blink_help_primary", "ttt_minty_blink_help_secondary" )
+    end
+
+    local charge_count  = cvar.charge_count:GetInt()
+    local charge_max    = ( charge_count > 0 and charge_count or cvar.charge_max:GetInt() )
+
     self.Charge.Current = charge_max
     self.Charge.Maximum = charge_max
 
@@ -118,14 +138,6 @@ function SWEP:OnRemove()
     if self.Emitter then self.Emitter:Finish() end
 end
 
-function SWEP:PreDrawViewModel()
-    render.SetBlend( 0 ) -- Hide viewmodel
-end
-
-function SWEP:ViewModelDrawn()                  
-    render.SetBlend( 1 ) -- Show hands
-end
-
 function SWEP:Deploy()
     self:Blink_DoViewModelAnimation()
     return true
@@ -139,10 +151,9 @@ function SWEP:Blink_SetTimers( particle, recharge, post_process )
 end
 
 function SWEP:Blink_DoViewModelAnimation()
-    local owner = self.Owner
-    if not IsValid( owner ) then return end
+    if not IsValid( self.Owner ) then return end
 
-    local viewmodel = owner:GetViewModel()
+    local viewmodel = self.Owner:GetViewModel()
     if not IsValid( viewmodel ) then return end
 
     if SERVER or IsFirstTimePredicted() then
@@ -154,12 +165,13 @@ function SWEP:Blink_DoAimTrace()
     local owner = self.Owner
     if not IsValid( owner ) then return nil end
 
-    local trace_hull = Vector( trace_hull_size, trace_hull_size, trace_hull_size )
-
     -- Initial trace
+    local vec_eye = owner:EyePos()
+    local vec_aim = owner:GetAimVector()
+
     local marker_trace = util.TraceLine( {
-        start   = owner:EyePos() + owner:GetAimVector(),
-        endpos  = owner:EyePos() + owner:GetAimVector() * cvar.range:GetInt(),
+        start   = vec_eye + vec_aim,
+        endpos  = vec_eye + vec_aim * cvar.range:GetInt(),
         mask    = MASK_ALL,
         filter  = owner
     } )
@@ -169,12 +181,12 @@ function SWEP:Blink_DoAimTrace()
     local ledge_trace = nil
 
     if marker_hit_wall then
-        for i = 1, ledge_step_max do
-            local origin = marker_trace.HitPos + Vector( 0, 0, i * ledge_step_size )
+        for i = 1, lut.ledge_step_max do
+            local origin = marker_trace.HitPos + lut.trace_ledge_up[ i ]
             
             local candidate = util.TraceLine( {
                 start   = origin,
-                endpos  = origin - ( marker_trace.HitNormal * trace_ledge_depth ),
+                endpos  = origin - ( marker_trace.HitNormal * lut.trace_ledge_depth ),
                 mask    = MASK_PLAYERSOLID,
                 filter  = owner
             } )
@@ -191,21 +203,21 @@ function SWEP:Blink_DoAimTrace()
     -- Find ground
     local ground_trace_origin =
         ledge_trace and ledge_trace.HitPos or 
-        marker_hit_wall and ( marker_trace.HitPos + marker_trace.HitNormal * trace_hull_size * 2 ) or
+        marker_hit_wall and ( marker_trace.HitPos + marker_trace.HitNormal * lut.trace_hull_size * 2 ) or
         marker_trace.HitPos
 
     local ground_trace = util.TraceLine( {
         start   = ground_trace_origin,
-        endpos  = ground_trace_origin - Vector( 0, 0, 65535 ),
+        endpos  = ground_trace_origin - vector_up_far,
         mask    = MASK_PLAYERSOLID,
         filter  = owner
     } )
 
     ground_trace = util.TraceHull( { -- Detect highest point on uneven surface
-        start   = ground_trace.HitPos - ( ground_trace.Normal * trace_hull_size ),
+        start   = ground_trace.HitPos - ( ground_trace.Normal * lut.trace_hull_size ),
         endpos  = ground_trace.HitPos,
-        mins    = -trace_hull,
-        maxs    = trace_hull,
+        mins    = -lut.trace_hull,
+        maxs    = lut.trace_hull,
         mask    = MASK_PLAYERSOLID,
         filter  = owner
     } )
@@ -219,15 +231,15 @@ function SWEP:Blink_DoAimTrace()
     local angle = normal:Angle()
 
     local use_lut =
-        ledge_trace and lut.ledge or 
-        marker_hit_wall and lut.wall or
-        lut.floor
+        ledge_trace and lut.lut_ledge or 
+        marker_hit_wall and lut.lut_wall or
+        lut.lut_floor
 
-    for k, v in pairs( use_lut ) do -- Evaluate points
+    for _, v in ipairs( use_lut ) do -- Evaluate points
         local point = Vector( v )
         point:Rotate( angle )
         
-        point = ( origin + point * lut.__size )
+        point = ( origin + point * lut.collision_check_size )
 
         local player_trace = util.TraceHull( { 
             start   = point,
@@ -269,15 +281,19 @@ end
 
 function SWEP:Blink_DoRecharge()
     if ( self.Timer.Recharge <= 0 ) then return false end
-    local delta_seconds = ( CurTime() - self.Timer.Recharge )
-
     self:Blink_ClampCharge()
-    if ( self.Charge.Current >= self.Charge.Maximum ) then return false end
 
     local charge_count = cvar.charge_count:GetInt()
-    local recharge_amount =
-        ( charge_count > 0 ) and 0 or 
-        ( cvar.charge_recharge_rate:GetFloat() * delta_seconds )
+
+    if ( charge_count > 0 ) then
+        self.Timer.Recharge = 0
+        return false
+    end
+
+    if ( self.Charge.Current >= self.Charge.Maximum ) then return false end
+
+    local delta_seconds = ( CurTime() - self.Timer.Recharge )
+    local recharge_amount = ( cvar.charge_recharge_rate:GetFloat() * delta_seconds )
     
     local new_charge = math.min( self.Charge.Current + recharge_amount, self.Charge.Maximum )
 
@@ -364,14 +380,14 @@ function SWEP:State_Aim()
 
             -- Teleport player
             owner:SetPos( target )
-            owner:SetLocalVelocity( Vector( 0, 0, 0 ) )
+            owner:SetLocalVelocity( vector_zero )
 
             -- Change state
             self:Blink_SetTimers( false, true, false )
             self.Warp.Marker    = nil
             self.Warp.Target    = nil
             self.State          = self.State_Idle
-        else
+        else -- target
             -- Released without valid warp target
             should_cancel = true
         end
@@ -404,45 +420,9 @@ function SWEP:Think()
     self.State( self )
 end
 
--- TODO: Cleanup
+--  HUD
 function SWEP:DrawHUD()
-    local x = ( ScrW() / 2.0 )
-    local y = ( ScrH() / 2.0 )
-
-    y = ( y + ( y / 3 ) )
-
-    local charge_count = cvar.charge_count:GetInt()
-    local charge_max = ( charge_count > 0 ) and charge_count or cvar.charge_max:GetInt()
-    local charge_ratio = self.Charge.Current / charge_max
-    local charge_max_ratio = self.Charge.Maximum / charge_max
-
-    local w, h = 200, 20
-
-    if charge_max_ratio > 0 then
-        surface.SetDrawColor( 0, 0, 255, 78 )
-    else
-        surface.SetDrawColor( 255, 0, 0, 155 )
-    end
-
-    surface.DrawOutlinedRect( x - w/2, y - h, w, h )
-    surface.DrawRect( x - w/2, y - h, w * charge_max_ratio, h )
-
-    surface.SetDrawColor( 0, 75, 255, 100 )
-    surface.DrawRect( x - w/2, y - h, w * charge_ratio, h )
-
-    surface.SetFont( "TabLarge" )
-    surface.SetTextColor( 255, 255, 255, 180 )
-    surface.SetTextPos( ( x - w/2 ) + 3, y - h - 15 )
-    surface.DrawText( "CHARGE" )
-
-    if ( charge_count > 0 ) then
-        local num_total = charge_count
-        local num_remaining = math.ceil( charge_max_ratio * num_total )
-
-        surface.SetTextPos( ( x - w/2 ) + 3, y + h - 15 )
-        surface.DrawText( "(" .. num_remaining .. "/" .. num_total .. ")" )
-    end
-
+    draw_hud( self, cvar.charge_count:GetInt(), cvar.charge_max:GetInt() )
     self.BaseClass.DrawHUD( self )
 end
 
@@ -453,7 +433,7 @@ if CLIENT then
         if ( cvar.post_process:GetInt() > 0 ) and IsValid( LocalPlayer() ) then
             local weapon = LocalPlayer():GetActiveWeapon()
 
-            if IsValid( weapon ) and ( weapon.ClassName == post_process_class_name ) then
+            if IsValid( weapon ) and ( weapon.ClassName == swep_classname ) then
                 local timer = weapon.Timer.PostProcess
 
                 if ( timer > 0 ) then
