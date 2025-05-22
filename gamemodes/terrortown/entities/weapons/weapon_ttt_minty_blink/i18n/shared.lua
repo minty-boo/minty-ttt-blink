@@ -1,3 +1,0 @@
-AddCSLuaFile()
-
-include( "en.lua" )

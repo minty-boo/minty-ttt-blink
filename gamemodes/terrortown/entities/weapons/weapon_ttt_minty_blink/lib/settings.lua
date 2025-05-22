@@ -81,7 +81,7 @@ return function( self, parent )
         decimal = 0
     })
 
-    -- ttt_minty_blink_charge_count
+    -- ttt_minty_blink_post_process
     form:MakeHelp({
         label = "ttt_minty_blink_post_process_help"
     })

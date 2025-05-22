@@ -3,15 +3,16 @@
 
 AddCSLuaFile()
 
-local IS_TTT2 = GAMEMODE.TTT2CheckFindCredits and true or false
+-- Language
+include( "i18n/de.lua" )
+include( "i18n/en.lua" )
+include( "i18n/nl.lua" )
 
 -- Modules
-include( "i18n/shared.lua" )
-
 local effect    = include( "lib/effect.lua" )
 local cvar      = include( "lib/cvar.lua" )
 local dbg       = include( "lib/debug.lua" )
-local draw_hud  = include( "lib/hud.lua" )
+local hud       = include( "lib/hud.lua" )
 local lut       = include( "lib/lut.lua" )
 local res       = include( "lib/resource.lua" )
 
@@ -96,7 +97,7 @@ SWEP.State      = nil
 function SWEP:DryFire() return false end  -- Disable default behaviours
 function SWEP:PrimaryAttack() return false end
 
-if not IS_TTT2 then
+if not TTT2 then
     -- TTT2 uses SWEP.ShowDefaultViewModel (https://github.com/Metastruct/terrortown_modding/pull/11#discussion_r2089630022)
     function SWEP:PreDrawViewModel()
         render.SetBlend( 0 ) -- Hide viewmodel
@@ -108,7 +109,7 @@ if not IS_TTT2 then
 end
 
 function SWEP:Initialize()
-    if IS_TTT2 and CLIENT then
+    if TTT2 and CLIENT then
         self:AddTTT2HUDHelp( "ttt_minty_blink_help_primary", "ttt_minty_blink_help_secondary" )
     end
 
@@ -421,7 +422,7 @@ end
 
 --  HUD
 function SWEP:DrawHUD()
-    draw_hud( self, cvar.charge_count:GetInt(), cvar.charge_max:GetInt() )
+    hud( self, cvar.charge_count:GetInt(), cvar.charge_max:GetInt() )
     self.BaseClass.DrawHUD( self )
 end
 
