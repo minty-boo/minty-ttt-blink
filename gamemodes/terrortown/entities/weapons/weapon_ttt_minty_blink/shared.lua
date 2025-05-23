@@ -6,7 +6,7 @@ AddCSLuaFile()
 -- Language
 include( "i18n/de.lua" )
 include( "i18n/en.lua" )
-include( "i18n/nl.lua" )
+-- include( "i18n/nl.lua" )
 
 -- Modules
 local effect    = include( "lib/effect.lua" )
