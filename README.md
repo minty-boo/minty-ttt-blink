@@ -18,7 +18,7 @@ This special weapon supports the following configurable variables.
 | `ttt_minty_blink_post_process` | Whether to enable post-processing (`0/1`).  | `int` | `0` |
 | `ttt_minty_blink_range` | The maximum blink distance in Source units.  | `int` | `3072` |
 
-<sup>1</sup>*Unused in 'limited' mode (`ttt_minty_blink_charge_cost > 0`).*
+<sup>1</sup>*Unused in 'limited' mode (`ttt_minty_blink_charge_count > 0`).*
 
 ## License
 See `LICENSE.md`.
