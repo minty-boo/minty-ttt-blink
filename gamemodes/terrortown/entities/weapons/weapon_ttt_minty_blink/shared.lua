@@ -6,7 +6,6 @@ AddCSLuaFile()
 -- Language
 include( "i18n/de.lua" )
 include( "i18n/en.lua" )
--- include( "i18n/nl.lua" )
 
 -- Modules
 local effect    = include( "lib/effect.lua" )
@@ -57,10 +56,10 @@ SWEP.ViewModelFOV           = 67
 SWEP.WorldModel             = "models/weapons/w_slam.mdl"
 
 SWEP.Primary.Recoil         = 0
-SWEP.Primary.ClipSize       = -1
-SWEP.Primary.DefaultClip    = -1
+SWEP.Primary.ClipSize       = cvar.charge_count:GetInt()
+SWEP.Primary.DefaultClip    = cvar.charge_count:GetInt()
 SWEP.Primary.Automatic      = false
-SWEP.Primary.Delay          = 0.10
+SWEP.Primary.Delay          = cvar.charge_time:GetFloat()
 SWEP.Primary.Ammo           = "none"
 
 --  TTT
@@ -71,20 +70,15 @@ SWEP.NoSights               = true
 SWEP.EquipMenuData          = {
     type = "item_weapon",
     desc = "ttt_minty_blink_description"
-};
+}
 
 SWEP.Icon                   = res.icon
 
 --  Special
 SWEP.Timer      = {
+    Overcharge  = 0,
     Particle    = 0,
-    Recharge    = 0,
     PostProcess = 0,
-}
-
-SWEP.Charge = {
-    Current = ( cvar.charge_count:GetInt() > 0 and cvar.charge_count:GetInt() or cvar.charge_max:GetInt() ),
-    Maximum = ( cvar.charge_count:GetInt() > 0 and cvar.charge_count:GetInt() or cvar.charge_max:GetInt() ),
 }
 
 SWEP.Warp   = {
@@ -117,12 +111,6 @@ function SWEP:Initialize()
         self:AddTTT2HUDHelp( "ttt_minty_blink_help_primary", "ttt_minty_blink_help_secondary" )
     end
 
-    local charge_count  = cvar.charge_count:GetInt()
-    local charge_max    = ( charge_count > 0 and charge_count or cvar.charge_max:GetInt() )
-
-    self.Charge.Current = charge_max
-    self.Charge.Maximum = charge_max
-
     if CLIENT then
         self.Emitter = ParticleEmitter( self:GetPos() )
     end
@@ -131,9 +119,7 @@ function SWEP:Initialize()
 end
 
 function SWEP:OwnerChanged()
-    self:Blink_ClampCharge()
     self:Blink_ForceReset()
-
     self.BaseClass.OwnerChanged( self )
 end
 
@@ -144,8 +130,14 @@ end
 
 function SWEP:Deploy()
     self:Blink_DoViewModelAnimation()
-    self:Blink_DoRecharge()
     self:Blink_ForceReset()
+
+    return true
+end
+
+function SWEP:CanPrimaryAttack()
+    if ( self:Clip1() <= 0 ) then return false end
+    if ( self:GetNextPrimaryFire() > CurTime() ) and not ( cvar.overcharge_damage:GetInt() > 0 ) then return false end
 
     return true
 end
@@ -173,9 +165,13 @@ local function Blink_TraceHull( owner, origin, target, mins, maxs, mask )
     } )
 end
 
-function SWEP:Blink_SetTimers( particle, recharge, post_process )
+local function Blink_RandomValue( tbl )
+    return tbl[ math.random( 1, #tbl ) ]
+end
+
+function SWEP:Blink_SetTimers( overcharge, particle, post_process )
+    self.Timer.Overcharge = overcharge and self.Timer.Overcharge or 0
     self.Timer.Particle = particle and CurTime() or 0
-    self.Timer.Recharge = recharge and CurTime() or 0
     self.Timer.PostProcess = post_process and CurTime() or 0
 end
 
@@ -337,54 +333,11 @@ function SWEP:Blink_DoAimTrace( owner )
     end
 end
 
-function SWEP:Blink_ClampCharge()
-    local charge_count = cvar.charge_count:GetInt()
-    local charge_max = ( charge_count > 0 and charge_count or cvar.charge_max:GetInt() )
-
-    if ( self.Charge.Current > charge_max ) then self.Charge.Current = charge_max end
-    if ( self.Charge.Maximum > charge_max ) then self.Charge.Maximum = charge_max end
-end
-
-function SWEP:Blink_DoRecharge()
-    if ( self.Timer.Recharge <= 0 ) then return false end
-    self:Blink_ClampCharge()
-
-    local charge_count = cvar.charge_count:GetInt()
-
-    if ( charge_count > 0 ) then
-        self.Timer.Recharge = 0
-        return false
-    end
-
-    if ( self.Charge.Current >= self.Charge.Maximum ) then return false end
-
-    local delta_seconds = ( CurTime() - self.Timer.Recharge )
-    local recharge_amount = ( cvar.charge_recharge_rate:GetFloat() * delta_seconds )
-    
-    local new_charge = math.min( self.Charge.Current + recharge_amount, self.Charge.Maximum )
-
-    self.Charge.Current = new_charge
-    self.Timer.Recharge = CurTime()
-
-    return true
-end
-
 function SWEP:Blink_TakeChargeOnce()
-    if ( self.Charge.Current <= 0 ) then return false end
+    if not self:CanPrimaryAttack() then return false end
     
-    self:Blink_ClampCharge()
-
-    local charge_count = cvar.charge_count:GetInt()
-    local charge_cost = ( charge_count > 0 and 1 or cvar.charge_cost:GetInt() )
-    
-    local penalty_amount = 
-        ( charge_count > 0 ) and 1 or
-        ( ( self.Charge.Current < self.Charge.Maximum ) and ( charge_cost * cvar.charge_exhaust_scalar:GetFloat() ) or 0 )
-    
-    local new_charge = math.max( self.Charge.Current - charge_cost, 0 )
-
-    self.Charge.Current = new_charge
-    self.Charge.Maximum = math.max( 0, self.Charge.Maximum - penalty_amount )
+    self:TakePrimaryAmmo( 1 )
+    self:SetNextPrimaryFire( CurTime() + self.Primary.Delay )
 
     return true
 end
@@ -398,19 +351,19 @@ end
 
 --  State machine
 function SWEP:State_Idle( owner )
-    if owner:KeyDown( IN_ATTACK ) and ( self.Charge.Current > 0 ) then
+    if owner:KeyDown( IN_ATTACK ) and self:CanPrimaryAttack() then
+        self.Timer.Overcharge = ( self:GetNextPrimaryFire() - CurTime() )
+
         -- Emit aim sound
         self:EmitSound(
-            res.sound.aim[ math.random( 1, #res.sound.aim ) ],
+            Blink_RandomValue( res.sound.aim ),
             75,
-            math.random( 95, 105 )
+            ( self.Timer.Overcharge > 0 ) and math.random( 110, 115 ) or math.random( 95, 105 )
         )
 
         -- Change state
-        self:Blink_SetTimers( false, false, true )
+        self:Blink_SetTimers( true, false, true )
         self.State = self.State_Aim
-    else -- owner:KeyDown( IN_ATTACK ) and ( self.Charge.Current > 0 )
-        self:Blink_DoRecharge()
     end
 end
 
@@ -419,7 +372,12 @@ function SWEP:State_Aim( owner )
 
     if owner:KeyDown( IN_ATTACK ) then
         self:Blink_DoAimTrace( owner )
-        effect.Marker( owner, marker_effect_rate, marker_effect_size )
+        effect.Marker( owner, marker_effect_rate, marker_effect_size, ( self.Timer.Overcharge > 0 ) )
+
+        -- Overcharge freezes timer
+        if ( self.Timer.Overcharge > 0 ) then
+            self:SetNextPrimaryFire( CurTime() + self.Timer.Overcharge )
+        end
     else -- owner:KeyDown( IN_ATTACK )
         local target = self.Warp.Target
 
@@ -429,10 +387,31 @@ function SWEP:State_Aim( owner )
 
             -- Emit teleport sound
             self:EmitSound(
-                res.sound.teleport[ math.random( 1, #res.sound.teleport ) ],
+                Blink_RandomValue( res.sound.teleport ),
                 75,
                 math.random( 95, 105 )
             )
+
+            -- Overcharge effects
+            if ( self.Timer.Overcharge > 0 ) then
+                -- Emit overcharge sound
+                owner:EmitSound(
+                    Blink_RandomValue( res.sound.overcharge ),
+                    40,
+                    math.random( 105, 110 )
+                )
+
+                -- Take scaled damage
+                if SERVER then
+                    local dmg = DamageInfo()
+                    dmg:SetDamage( cvar.overcharge_damage:GetInt() * ( self.Timer.Overcharge / self.Primary.Delay ) )
+                    dmg:SetAttacker( owner )
+                    dmg:SetInflictor( self )
+                    dmg:SetDamageType( DMG_DISSOLVE )
+
+                    owner:TakeDamageInfo( dmg )
+                end
+            end
 
             -- Effects
             effect.Dissolve( owner )
@@ -443,7 +422,7 @@ function SWEP:State_Aim( owner )
             owner:SetLocalVelocity( vector_zero )
 
             -- Change state
-            self:Blink_SetTimers( false, true, false )
+            self:Blink_SetTimers()
             self.Warp.Marker    = nil
             self.Warp.Target    = nil
             self.State          = self.State_Idle
@@ -464,7 +443,7 @@ end
 
 function SWEP:State_Cancel( owner )    
     if not owner:KeyDown( IN_ATTACK ) and not owner:KeyDown( IN_ATTACK2 ) then
-        self:Blink_SetTimers( false, true, false )
+        self:Blink_SetTimers()
         self.State          = self.State_Idle
     end
 end
@@ -482,7 +461,7 @@ end
 
 --  HUD
 function SWEP:DrawHUD()
-    hud( self, cvar.charge_count:GetInt(), cvar.charge_max:GetInt() )
+    hud( self )
     self.BaseClass.DrawHUD( self )
 end
 

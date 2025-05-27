@@ -11,7 +11,7 @@ _m.displacement_step_size   = 12
 
 _m.ledge_step_max           = 4
 _m.ledge_step_size          = 8
-_m.ledge_trace_depth        = 2
+_m.ledge_trace_depth        = 12
 _m.ledge_trace_up           = {}
 
 _m.player_width             = 16
