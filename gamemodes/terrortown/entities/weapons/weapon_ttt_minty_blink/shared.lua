@@ -234,7 +234,7 @@ function SWEP:Blink_DoAimTrace( owner )
     end
 
     -- Find ledge
-    local hit_wall = marker_trace.Hit and ( math.abs( marker_trace.HitNormal.z ) < 0.15 )
+    local hit_wall = marker_trace.Hit and ( math.abs( marker_trace.HitNormal.z ) < 0.375 )
     local ledge_trace = nil
 
     if not hit_displacement and hit_wall then
@@ -257,9 +257,27 @@ function SWEP:Blink_DoAimTrace( owner )
         end
     end
 
+    -- Sloped ledge?
+    local ledge_origin = ledge_trace and ( ledge_trace.StartPos + ledge_trace.Normal * 0.5 ) or nil
+    local ledge_sloped = false
+
+    if ledge_trace then
+        local slope_trace = Blink_Trace(
+            owner,
+            ledge_origin,
+            ledge_origin - vector_up_far
+        )
+
+        ledge_sloped = slope_trace.Hit and ( slope_trace.HitNormal.z < 0.5 )
+    end
+
+    if ledge_sloped then
+        ledge_origin = ledge_trace.HitPos
+    end
+
     -- Find ground
     local ground_trace_origin =
-        ledge_trace and ledge_trace.HitPos or 
+        ledge_trace and ledge_origin or 
         hit_wall and ( marker_trace.HitPos + marker_trace.HitNormal * lut.player_width ) or
         marker_trace.HitPos
 
