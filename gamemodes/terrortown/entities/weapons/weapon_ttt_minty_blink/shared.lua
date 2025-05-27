@@ -140,6 +140,9 @@ end
 
 function SWEP:Deploy()
     self:Blink_DoViewModelAnimation()
+    self:Blink_DoRecharge()
+    self:Blink_ForceReset()
+
     return true
 end
 
@@ -151,9 +154,10 @@ function SWEP:Blink_SetTimers( particle, recharge, post_process )
 end
 
 function SWEP:Blink_DoViewModelAnimation()
-    if not IsValid( self.Owner ) then return end
+    local owner = self:GetOwner()
+    if not IsValid( owner ) then return end
 
-    local viewmodel = self.Owner:GetViewModel()
+    local viewmodel = owner:GetViewModel()
     if not IsValid( viewmodel ) then return end
 
     if SERVER or IsFirstTimePredicted() then
@@ -161,10 +165,7 @@ function SWEP:Blink_DoViewModelAnimation()
     end
 end
 
-function SWEP:Blink_DoAimTrace()
-    local owner = self.Owner
-    if not IsValid( owner ) then return nil end
-
+function SWEP:Blink_DoAimTrace( owner )
     -- Initial trace
     local vec_eye = owner:EyePos()
     local vec_aim = owner:GetAimVector()
@@ -331,10 +332,7 @@ function SWEP:Blink_ForceReset()
 end
 
 --  State machine
-function SWEP:State_Idle()
-    local owner = self.Owner
-    if not IsValid( owner ) then return end
-
+function SWEP:State_Idle( owner )
     if owner:KeyDown( IN_ATTACK ) and ( self.Charge.Current > 0 ) then
         -- Emit aim sound
         self:EmitSound(
@@ -351,14 +349,11 @@ function SWEP:State_Idle()
     end
 end
 
-function SWEP:State_Aim()
-    local owner = self.Owner
-    if not IsValid( owner ) then return end
-
+function SWEP:State_Aim( owner )
     local should_cancel = owner:KeyDown( IN_ATTACK2 )
 
     if owner:KeyDown( IN_ATTACK ) then
-        self:Blink_DoAimTrace()
+        self:Blink_DoAimTrace( owner )
         effect.Marker( owner, marker_effect_rate, marker_effect_size )
     else -- owner:KeyDown( IN_ATTACK )
         local target = self.Warp.Target
@@ -402,10 +397,7 @@ function SWEP:State_Aim()
     end
 end
 
-function SWEP:State_Cancel()
-    local owner = self.Owner
-    if not IsValid( owner ) then return end
-    
+function SWEP:State_Cancel( owner )    
     if not owner:KeyDown( IN_ATTACK ) and not owner:KeyDown( IN_ATTACK2 ) then
         self:Blink_SetTimers( false, true, false )
         self.State          = self.State_Idle
@@ -415,9 +407,12 @@ end
 function SWEP:Think()
     if not IsFirstTimePredicted() then return end 
 
+    local owner = self:GetOwner()
+    if not IsValid( owner ) then return end
+
     -- State machine
     if not self.State then self.State = self.State_Idle end
-    self.State( self )
+    self.State( self, owner )
 end
 
 --  HUD
