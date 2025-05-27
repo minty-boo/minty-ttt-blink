@@ -29,6 +29,10 @@ local post_process_fade_time = 0.125
 local vector_up_far = Vector( 0, 0, 65535 )
 local vector_zero   = Vector( 0, 0, 0 )
 
+-- Frequently called
+local util_TraceLine        = util.TraceLine
+local util_TraceHull        = util.TraceHull
+
 -- TTT2 settings
 SWEP.AddToSettingsMenu      = include( "lib/settings.lua" )
 
@@ -147,6 +151,28 @@ function SWEP:Deploy()
 end
 
 --  Utility
+local function Blink_Trace( owner, origin, target, mask )
+    -- To reduce boilerplate code
+    return util_TraceLine( {
+        start   = origin,
+        endpos  = target or origin,
+        mask    = mask or MASK_ALL,
+        filter  = owner,
+    } )
+end
+
+local function Blink_TraceHull( owner, origin, target, mins, maxs, mask )
+    -- To reduce boilerplate code
+    return util_TraceHull( {
+        start   = origin,
+        endpos  = target or origin,
+        mins    = mins,
+        maxs    = maxs,
+        mask    = mask or MASK_ALL,
+        filter  = owner,
+    } )
+end
+
 function SWEP:Blink_SetTimers( particle, recharge, post_process )
     self.Timer.Particle = particle and CurTime() or 0
     self.Timer.Recharge = recharge and CurTime() or 0
@@ -170,27 +196,57 @@ function SWEP:Blink_DoAimTrace( owner )
     local vec_eye = owner:EyePos()
     local vec_aim = owner:GetAimVector()
 
-    local marker_trace = util.TraceLine( {
-        start   = vec_eye + vec_aim,
-        endpos  = vec_eye + vec_aim * cvar.range:GetInt(),
-        mask    = MASK_ALL,
-        filter  = owner
-    } )
+    local marker_trace = Blink_Trace(
+        owner,
+        vec_eye + vec_aim,
+        vec_eye + vec_aim * cvar.range:GetInt()
+    )
+
+    local ledge_trace_origin = marker_trace.HitPos
+
+    -- Displacement wall?
+    local hit_displacement = ( marker_trace.DispFlags > 0 ) and ( bit.band( marker_trace.DispFlags, DISPSURF_WALKABLE ) == 0 )
+
+    if hit_displacement then
+        -- Snap to wall angle
+        marker_trace.HitNormal.z = 0
+        
+        -- Find floor in front of displacement
+        for i = 1, lut.displacement_step_max do
+            local origin = marker_trace.HitPos + ( marker_trace.HitNormal * i * lut.displacement_step_size )
+
+            local candidate = Blink_Trace(
+                owner,
+                origin,
+                origin - vector_up_far
+            )
+
+            local hit_walkable = 
+                ( ( candidate.DispFlags == 0 ) or ( bit.band( candidate.DispFlags, DISPSURF_WALKABLE ) == DISPSURF_WALKABLE ) ) and
+                ( candidate.HitNormal.z > 0.25 )
+            
+            -- Offset initial trace
+            if hit_walkable then
+                marker_trace.HitPos = candidate.StartPos
+                break
+            end
+        end
+    end
 
     -- Find ledge
-    local marker_hit_wall = marker_trace.Hit and math.abs( marker_trace.HitNormal.z ) < 0.15
+    local hit_wall = marker_trace.Hit and ( math.abs( marker_trace.HitNormal.z ) < 0.15 )
     local ledge_trace = nil
 
-    if marker_hit_wall then
+    if not hit_displacement and hit_wall then
         for i = 1, lut.ledge_step_max do
-            local origin = marker_trace.HitPos + lut.trace_ledge_up[ i ]
-            
-            local candidate = util.TraceLine( {
-                start   = origin,
-                endpos  = origin - ( marker_trace.HitNormal * lut.trace_ledge_depth ),
-                mask    = MASK_PLAYERSOLID,
-                filter  = owner
-            } )
+            local origin = ledge_trace_origin + lut.ledge_trace_up[ i ]
+
+            local candidate = Blink_Trace(
+                owner,
+                origin,
+                origin - ( marker_trace.HitNormal * lut.ledge_trace_depth ),
+                MASK_PLAYERSOLID
+            )
 
             dbg.ledge_check( candidate )
 
@@ -204,24 +260,15 @@ function SWEP:Blink_DoAimTrace( owner )
     -- Find ground
     local ground_trace_origin =
         ledge_trace and ledge_trace.HitPos or 
-        marker_hit_wall and ( marker_trace.HitPos + marker_trace.HitNormal * lut.trace_hull_size * 2 ) or
+        hit_wall and ( marker_trace.HitPos + marker_trace.HitNormal * lut.player_width ) or
         marker_trace.HitPos
 
-    local ground_trace = util.TraceLine( {
-        start   = ground_trace_origin,
-        endpos  = ground_trace_origin - vector_up_far,
-        mask    = MASK_PLAYERSOLID,
-        filter  = owner
-    } )
-
-    ground_trace = util.TraceHull( { -- Detect highest point on uneven surface
-        start   = ground_trace.HitPos - ( ground_trace.Normal * lut.trace_hull_size ),
-        endpos  = ground_trace.HitPos,
-        mins    = -lut.trace_hull,
-        maxs    = lut.trace_hull,
-        mask    = MASK_PLAYERSOLID,
-        filter  = owner
-    } )
+    local ground_trace = Blink_Trace(
+        owner,
+        ground_trace_origin,
+        ground_trace_origin - vector_up_far,
+        MASK_PLAYERSOLID
+    )
 
     -- Ensure player fit
     local player_mins, player_maxs = owner:GetCollisionBounds()
@@ -233,23 +280,23 @@ function SWEP:Blink_DoAimTrace( owner )
 
     local use_lut =
         ledge_trace and lut.lut_ledge or 
-        marker_hit_wall and lut.lut_wall or
+        hit_wall and lut.lut_wall or
         lut.lut_floor
 
     for _, v in ipairs( use_lut ) do -- Evaluate points
         local point = Vector( v )
         point:Rotate( angle )
         
-        point = ( origin + point * lut.collision_check_size )
+        point = ( origin + point * lut.collision_check_spacing )
 
-        local player_trace = util.TraceHull( { 
-            start   = point,
-            endpos  = point,
-            mins    = player_mins,
-            maxs    = player_maxs,
-            mask    = MASK_PLAYERSOLID,
-            filter  = owner,
-        } )
+        local player_trace = Blink_TraceHull(
+            owner,
+            point,
+            nil,
+            player_mins,
+            player_maxs,
+            MASK_PLAYERSOLID
+        )
         
         dbg.collision_check( player_trace )
 
